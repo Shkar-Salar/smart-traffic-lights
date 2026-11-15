@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Traffic Lights</title>
+<meta name="description" content="Deep reinforcement learning for traffic signal control. A Double DQN agent in PyTorch, trained on camera-recorded traffic from Jinan and evaluated on Hangzhou.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='2' width='14' height='28' rx='4' fill='%23222'/%3E%3Ccircle cx='16' cy='9' r='4' fill='%23d03b3b'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23fab219'/%3E%3Ccircle cx='16' cy='23' r='4' fill='%230ca30c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Artificial Intelligence course project · Deep reinforcement learning</p>
+    <h1>Smart Traffic Lights<span class="h1-sub">Using Deep Reinforcement Learning</span></h1>
+    <p class="lead">A deep reinforcement learning agent that controls traffic signals. It is trained on real traffic
+      recorded by roadside cameras at 12 intersections in Jinan, China, and evaluated without retraining on a
+      second city, Hangzhou.</p>
+    <p class="scope"><b>Scope:</b> this project does not perform vehicle detection; it learns the signal-control
+      decisions with reinforcement learning, assuming vehicle counts are available.</p>
+    <div class="tiles" aria-label="Headline results">
+      <div class="tile"><span class="tile-label"><i class="sw" style="--c:var(--fixed)"></i>Fixed-time control</span>
+        <span class="tile-num" id="t-fixed">486 s</span><span class="tile-sub">Standard timing plan</span></div>
+      <div class="tile"><span class="tile-label"><i class="sw" style="--c:var(--mp)"></i>Max-pressure control</span>
+        <span class="tile-num" id="t-mp">377 s</span><span class="tile-sub">Established adaptive rule</span></div>
+      <div class="tile tile-main"><span class="tile-label"><i class="sw" style="--c:var(--dqn)"></i>DQN agent</span>
+        <span class="tile-num" id="t-dqn">285 s</span><span class="tile-sub" id="t-dqn-sub">−41% vs fixed-time · −24% vs max-pressure</span></div>
+    </div>
+    <p class="note">Mean travel time per vehicle over one hour of real Jinan traffic. DQN value: mean of three trained agents.</p>
+    <nav class="toc" aria-label="Sections">
+      <a href="#watch">Simulation</a><a href="#ask">Decision model</a><a href="#results">Results</a><a href="#how">Method</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<!-- ------------------------------------------------------------------ -->
+<section id="watch" class="wrap">
+  <h2>Simulation replay</h2>
+  <p class="sec-lead">The same hour of traffic under two control methods, side by side. The network view shows every
+    signalised intersection; the close-up view shows a single intersection lane by lane. Selecting an intersection
+    on the map opens its close-up.</p>
+
+  <div class="controls" role="group" aria-label="Replay settings">
+    <label>Traffic scenario
+      <select id="sel-scen"></select></label>
+    <label>Left panel
+      <select id="sel-left"></select></label>
+    <label>Right panel
+      <select id="sel-right"></select></label>
+  </div>
+  <div class="controls view-row" role="group" aria-label="View">
+    <div class="seg" role="tablist" aria-label="View">
+      <button id="v-net" role="tab" aria-selected="true">Network</button>
+      <button id="v-close" role="tab" aria-selected="false">Intersection close-up</button>
+    </div>
+    <label class="inline">Intersection
+      <select id="sel-inter"></select></label>
+  </div>
+
+  <div class="duo">
+    <figure class="panel" id="panel-left">
+      <figcaption><span class="pname"></span><span class="pfinal"></span></figcaption>
+      <div class="closecap" hidden></div>
+      <div class="canvas-box"><canvas></canvas><div class="tip" hidden></div></div>
+      <dl class="stats">
+        <div><dt>Vehicles waiting</dt><dd class="s-wait">0</dd></div>
+        <div><dt>Trips completed</dt><dd class="s-fin">0</dd></div>
+        <div><dt>Mean travel time</dt><dd class="s-tt">–</dd></div>
+      </dl>
+    </figure>
+    <figure class="panel" id="panel-right">
+      <figcaption><span class="pname"></span><span class="pfinal"></span></figcaption>
+      <div class="closecap" hidden></div>
+      <div class="canvas-box"><canvas></canvas><div class="tip" hidden></div></div>
+      <dl class="stats">
+        <div><dt>Vehicles waiting</dt><dd class="s-wait">0</dd></div>
+        <div><dt>Trips completed</dt><dd class="s-fin">0</dd></div>
+        <div><dt>Mean travel time</dt><dd class="s-tt">–</dd></div>
+      </dl>
+    </figure>
+  </div>
+
+  <div class="player">
+    <button id="btn-play" class="btn primary" aria-label="Play">Play</button>
+    <input id="time" type="range" min="0" max="3600" step="1" value="0" aria-label="Simulation time">
+    <span id="clock" class="clock">00:00</span>
+    <label class="speed">Speed
+      <select id="sel-speed">
+        <option value="10">10×</option><option value="30" selected>30×</option><option value="60">60×</option>
+        <option value="120">120×</option><option value="240">240×</option>
+      </select></label>
+  </div>
+
+  <div class="map-legend" id="legend-net" aria-label="Legend">
+    <span><i class="lg-q"></i>Stopped vehicles (queue length to scale)</span>
+    <span><i class="lg-m"></i>Moving vehicles</span>
+    <span><i class="lg-l" style="--c:var(--go)"></i>Green</span>
+    <span><i class="lg-l" style="--c:var(--amber)"></i>Amber</span>
+    <span><i class="lg-l" style="--c:var(--stop)"></i>Red</span>
+  </div>
+  <div class="map-legend" id="legend-close" aria-label="Legend" hidden>
+    <span><i class="lg-car" style="--c:var(--queue)"></i>Stopped vehicle</span>
+    <span><i class="lg-car" style="--c:var(--moving)"></i>Moving vehicle</span>
+    <span><i class="lg-bar" style="--c:var(--go)"></i>Stop line: green</span>
+    <span><i class="lg-bar" style="--c:var(--amber)"></i>amber</span>
+    <span><i class="lg-bar" style="--c:var(--stop)"></i>red</span>
+    <span>Lanes per approach: left turn, straight, right turn (right turns always permitted)</span>
+  </div>
+
+  <div class="chart-card">
+    <div class="chart-head">
+      <h3>Vehicles waiting in the network</h3>
+      <div class="legend" id="wait-legend"></div>
+    </div>
+    <div class="chart-box"><canvas id="wait-chart"></canvas><div class="tip" id="wait-tip" hidden></div></div>
+  </div>
+
+  <p class="fine">Replays recorded from the CityFlow simulator with the trained agents; the hourly averages match the
+    project report. Stopped and moving vehicle counts are recorded per lane every 10 seconds. In the close-up, the
+    number of moving vehicles comes from the simulation, while their spacing along the road is drawn evenly.</p>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="ask" class="wrap">
+  <h2>Decision model</h2>
+  <p class="sec-lead">The trained network, exported from PyTorch and executed in the browser. Any traffic situation
+    entered here is scored exactly as the agent scores it in the simulator.</p>
+
+  <h3 class="sub">How the agent decides</h3>
+  <ol class="explain">
+    <li><span class="ex-num">1</span><b>Observe</b>
+      <p>Every 10 seconds, each intersection reports 32 numbers: the vehicles in each of its 12 approach lanes,
+        how many of them are stopped, and the phase currently shown. A camera-based detector can measure all of these.</p></li>
+    <li><span class="ex-num">2</span><b>Score</b>
+      <p>A neural network (32 inputs, two hidden layers of 128 units, 8 outputs) turns the 32 numbers into one score
+        per signal phase. The score is a Q-value: the expected future reward if that phase is chosen now, where
+        reward means fewer stopped vehicles.</p></li>
+    <li><span class="ex-num">3</span><b>Act</b>
+      <p>The phase with the highest score is shown for the next 10 seconds. A change of phase first needs 5 seconds
+        of amber, so the agent changes only when the expected gain outweighs that cost.</p></li>
+    <li><span class="ex-num">4</span><b>Learn</b>
+      <p>No traffic rules were programmed. In training, the agent tried phases in the simulator, observed the queues
+        that followed, and adjusted the network with Double DQN. This took 100 simulated hours, or 432,000 decisions.</p></li>
+  </ol>
+  <div class="netdiag" aria-label="Network structure">
+    <div class="nd"><b>32</b><span>inputs<br>lane counts + current phase</span></div><i>→</i>
+    <div class="nd"><b>128</b><span>hidden units<br>ReLU</span></div><i>→</i>
+    <div class="nd"><b>128</b><span>hidden units<br>ReLU</span></div><i>→</i>
+    <div class="nd nd-out"><b>8</b><span>scores<br>one per phase</span></div>
+  </div>
+
+  <h3 class="sub">Try the model</h3>
+  <p class="selftest" id="selftest">Verifying the browser model against PyTorch…</p>
+  <div class="ask">
+    <div class="ask-left">
+      <div class="ask-actions">
+        <button class="btn primary" id="btn-moment">Load a recorded situation</button>
+        <button class="btn" id="btn-clear">Reset</button>
+      </div>
+      <p class="moment" id="moment-info"></p>
+      <canvas id="ask-canvas" aria-label="Intersection diagram"></canvas>
+      <label class="cur-phase">Phase currently shown
+        <select id="sel-phase"></select></label>
+      <div class="sliders" id="sliders"></div>
+    </div>
+    <div class="ask-right">
+      <p class="dec-label">Selected phase</p>
+      <div class="decision" id="decision"></div>
+      <p class="dec-label">Score for each phase</p>
+      <div class="qlist" id="qlist" role="list"></div>
+      <p class="qnote">Scores are negative because the reward is the negative number of stopped vehicles. A score closer
+        to zero means fewer vehicles are expected to wait over the following minutes.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="results" class="wrap">
+  <h2>Results</h2>
+  <p class="sec-lead">Mean travel time in seconds; lower is better. The agents were trained on Jinan real traffic only,
+    so the other four scenarios were not seen during training. DQN and DQN+ values are the mean of three trained
+    agents, with the range in brackets.</p>
+  <div class="table-wrap"><table id="res-table"></table></div>
+  <p class="fine" id="res-note"></p>
+
+  <div class="figs">
+    <figure class="fig"><img src="assets/fig_learning_curve.png" alt="Learning curve: travel time falls from over 1,000 s to about 285 s and drops below max-pressure (377 s) within the first training episodes." loading="lazy">
+      <figcaption>Learning curve on Jinan. The agent outperforms max-pressure within the first few training episodes.</figcaption></figure>
+    <figure class="fig"><img src="assets/fig_noise.png" alt="Camera noise: with up to 20% of vehicles missed, DQN travel time rises from 285 s to 291 s; max-pressure remains above 350 s." loading="lazy">
+      <figcaption>Robustness to camera errors. With 20% of vehicles missed or miscounted, travel time rises by about 6 s.</figcaption></figure>
+    <figure class="fig wide"><img src="assets/fig_dqnplus.png" alt="DQN+ compared with DQN: similar results except Hangzhou heavy traffic, where DQN+ ranges 397–411 s against 385–465 s." loading="lazy">
+      <figcaption>DQN+ (pressure inputs, dueling network, varied training demand) narrows the spread on heavy traffic in the new city.</figcaption></figure>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="how" class="wrap">
+  <h2>Method</h2>
+  <ol class="pipeline">
+    <li><b>Camera</b><span>Detects vehicles and stopped vehicles in each approach lane.</span></li>
+    <li><b>State</b><span>32 numbers: lane counts and the current phase.</span></li>
+    <li><b>Neural network</b><span>Double DQN in PyTorch; one score per phase.</span></li>
+    <li><b>Safety layer</b><span>Minimum green, 5 s amber, fallback timing; hardware conflict monitor.</span></li>
+    <li><b>Signal</b><span>New decision every 10 seconds at every intersection.</span></li>
+  </ol>
+  <div class="cols">
+    <div>
+      <h3>Training</h3>
+      <p>The agent was trained in the CityFlow traffic simulator on one hour of real Jinan traffic, repeated over 100
+        episodes. A single network is shared by all 12 intersections, which is why the trained model also runs
+        unchanged on Hangzhou's 16 intersections. It is compared with a tuned fixed-time plan and with max-pressure
+        control on five traffic scenarios in two cities.</p>
+      <h3>Why a simulator</h3>
+      <p>Recorded video shows only what happened under the existing signal timing. Learning a control policy needs
+        the outcome of alternative decisions, which only a simulator calibrated with the camera data can provide.
+        Recorded footage is used to build that simulator and, in operation, live cameras supply the counts.</p>
+    </div>
+    <div>
+      <h3>Deployment</h3>
+      <ul>
+        <li>Existing cameras can be reused if they have a fixed view of every approach.</li>
+        <li>An edge computer in the roadside cabinet (e.g. NVIDIA Jetson Orin Nano, $249) runs the vehicle detector and the network.</li>
+        <li>Existing signals and controller remain in place; no road works and no internet connection are required for decisions.</li>
+        <li>Estimated hardware cost of $500–2,200 per intersection, against $8,000–60,000 for commercial adaptive systems.</li>
+        <li>Introduction in stages: shadow mode, supervised pilot, then a corridor of intersections.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="links"><a class="btn primary" href="assets/Smart_Traffic_Lights_Report.docx" download>Download the full report (Word)</a></p>
+</section>
+</main>
+
+<footer class="wrap foot">
+  <p>Smart Traffic Lights Using Deep Reinforcement Learning · Artificial Intelligence (Theory) course project. Traffic data: Jinan and Hangzhou datasets
+    from roadside surveillance cameras (Wei et al., CoLight, 2019). Simulator: CityFlow. Model: Double DQN in PyTorch.</p>
+</footer>
+
+<script src="data/index.js"></script>
+<script src="data/net_jinan.js"></script>
+<script src="data/net_hangzhou.js"></script>
+<script src="data/model_dqn.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
