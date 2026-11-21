@@ -32,7 +32,7 @@
   const interName = (id) => { const m = id.match(/_(\d+)_(\d+)$/); return m ? `Intersection (${m[1]}, ${m[2]})` : id; };
 
   if (!IDX || !MODEL) {
-    document.body.insertAdjacentHTML("afterbegin", '<p style="padding:16px;color:#d03b3b">Data files are missing (docs/data).</p>');
+    document.body.insertAdjacentHTML("afterbegin", '<p style="padding:16px;color:#d03b3b">Data files are missing (website/data).</p>');
     return;
   }
 
